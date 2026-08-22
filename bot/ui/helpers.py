@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Core Telegram UI helpers: message editing/sending, bot commands,
-license gate, and multi-channel forced-join enforcement.
+and multi-channel forced-join enforcement.
 """
 import json
 import logging
-import time
 
 from telebot import types
 
@@ -54,99 +53,6 @@ def send_or_edit(call_or_msg, text, reply_markup=None, disable_preview=True):
             pass
 
 
-# ── License Gate ───────────────────────────────────────────────────────────────
-# The bot MUST be a member/admin of this channel for the license to be considered active.
-LICENSE_CHANNEL_ID       = -1002261879501
-LICENSE_CHANNEL_USERNAME = "@EmadHabibnia"
-_LICENSE_CACHE_OK_TTL   = 300  # cache successful checks for 5 minutes
-_LICENSE_CACHE_FAIL_TTL = 15   # cache failed checks for only 15 seconds (re-check quickly)
-
-_license_cache: dict = {
-    "ok":              None,   # True/False/None (None = not yet checked)
-    "checked_at":      0.0,
-    "owner_notified":  False,  # reset whenever status flips to False
-}
-
-
-def check_license_gate() -> bool:
-    """
-    Return True if the bot is a member/admin of the license channel.
-    Successful results are cached for 5 minutes; failed results only 15 seconds
-    so the bot recovers quickly after being added to the channel.
-    """
-    now = time.time()
-    if _license_cache["ok"] is not None:
-        ttl = _LICENSE_CACHE_OK_TTL if _license_cache["ok"] else _LICENSE_CACHE_FAIL_TTL
-        if now - _license_cache["checked_at"] < ttl:
-            return bool(_license_cache["ok"])
-
-    try:
-        me     = bot.get_me()
-        member = bot.get_chat_member(LICENSE_CHANNEL_ID, me.id)
-        ok     = member.status in ("member", "administrator", "creator")
-    except Exception as exc:
-        logger.warning("License gate check failed: %s", exc)
-        ok = False
-
-    prev_ok = _license_cache["ok"]
-    _license_cache["ok"]         = ok
-    _license_cache["checked_at"] = now
-
-    # When transitioning to "not OK" (including first-time fail), reset notify flag
-    if not ok and (prev_ok is None or prev_ok is True):
-        _license_cache["owner_notified"] = False
-
-    return ok
-
-
-def notify_owner_license_fail():
-    """
-    Send the 'license not active' notification to all owners.
-    Called at most once per failure period (tracked by _license_cache["owner_notified"]).
-    """
-    if _license_cache.get("owner_notified"):
-        return
-    from ..config import ADMIN_IDS
-    for owner_id in ADMIN_IDS:
-        try:
-            bot.send_message(
-                owner_id,
-                "⚠️ <b>لایسنس رایگان ربات شما فعال نیست.</b>\n\n"
-                "برای فعال‌سازی به @Emad_Habibnia پیام دهید.",
-                parse_mode="HTML",
-            )
-        except Exception as exc:
-            logger.warning("Could not notify owner %s about license fail: %s", owner_id, exc)
-    _license_cache["owner_notified"] = True
-
-
-def send_license_fail_to_target(target):
-    """
-    Reply to a message/callback with the appropriate license-fail text.
-    Owners see the license prompt; regular users see a generic 'not active' message.
-    """
-    from ..config import ADMIN_IDS
-    if hasattr(target, "from_user"):
-        uid     = target.from_user.id
-        chat_id = target.message.chat.id if hasattr(target, "message") and target.message else target.chat.id
-    else:
-        uid     = getattr(target, "from_user", None)
-        chat_id = target.chat.id
-
-    if uid in ADMIN_IDS:
-        text = (
-            "⚠️ <b>لایسنس رایگان ربات شما فعال نیست.</b>\n\n"
-            "برای فعال‌سازی به @Emad_Habibnia پیام دهید."
-        )
-    else:
-        text = (
-            "⛔️ <b>ربات در حال حاضر فعال نیست.</b>\n\n"
-            "بعداً دوباره تلاش کنید."
-        )
-    try:
-        bot.send_message(chat_id, text, parse_mode="HTML")
-    except Exception:
-        pass
 
 
 # ── Forced Join (multi-channel) ────────────────────────────────────────────────

@@ -52,7 +52,6 @@ from ..gateways.tronpays_rial import (
 )
 from ..ui.helpers import (
     send_or_edit,
-    check_license_gate, notify_owner_license_fail, send_license_fail_to_target,
     check_channel_membership, channel_lock_message,
 )
 from ..ui.keyboards import kb_main, kb_admin_panel
@@ -239,12 +238,6 @@ def on_callback(call):
     if data in _PASSTHROUGH_CALLBACKS:
         if data == "check_channel":
             ensure_user(call.from_user)
-            # License gate comes first even on "check" callback
-            if not check_license_gate():
-                notify_owner_license_fail()
-                bot.answer_callback_query(call.id)
-                send_license_fail_to_target(call)
-                return
             if check_channel_membership(uid):
                 bot.answer_callback_query(call.id, "✅ عضویت تأیید شد!")
                 # In channel_join reward mode: give start reward to inviter
@@ -276,13 +269,6 @@ def on_callback(call):
 
     try:
         ensure_user(call.from_user)
-
-        # ── License Gate (blocks everyone when bot is not in license channel) ──
-        if not check_license_gate():
-            notify_owner_license_fail()
-            bot.answer_callback_query(call.id)
-            send_license_fail_to_target(call)
-            return
 
         if not check_channel_membership(uid):
             bot.answer_callback_query(call.id)
