@@ -269,7 +269,8 @@ def init_db():
             "referral_purchase_reward_amount":  "0",
             "referral_purchase_reward_package": "",
             # Multi-channel forced join (JSON list of {"name","username","id"})
-            "forced_channels": '[{"name": "Developer Bot", "username": "@EmadHabibnia", "id": "-1002261879501"}]',
+            # پیش‌فرض خالی است: عضویت اجباری را باید خودِ اپراتور بخواهد.
+            "forced_channels": "[]",
             # Last time the hourly owner promo was sent
             "owner_last_promo_at": "",
         }
@@ -304,6 +305,20 @@ def init_db():
                 conn.execute(sql)
             except Exception:
                 pass
+
+        # ── برداشتن قفلِ کانالِ دولوپر از نصب‌های قدیمی ───────────────────────
+        # این مقدار روی هر نصب seed می‌شد و هیچ صفحهٔ ادمینی نمی‌توانست عوضش کند،
+        # یعنی عملاً همان قفل لایسنس بود با لباس «تنظیمات». فقط وقتی پاک می‌شود
+        # که دقیقاً همان مقدار پیش‌فرض باشد، تا اگر اپراتور دستی چیزی گذاشته
+        # دست‌نخورده بماند.
+        try:
+            conn.execute(
+                "UPDATE settings SET value='[]' WHERE key='forced_channels' AND value=?",
+                ('[{"name": "Developer Bot", "username": "@EmadHabibnia", '
+                 '"id": "-1002261879501"}]',)
+            )
+        except Exception:
+            pass
 
         # ── آزادسازی رزروهای یتیم ────────────────────────────────────────────
         # کانفیگی که reserved_payment_id دارد ولی فروخته نشده، فقط تا وقتی معتبر
