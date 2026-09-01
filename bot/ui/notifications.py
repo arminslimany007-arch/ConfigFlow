@@ -536,17 +536,25 @@ def check_and_give_referral_purchase_reward(buyer_user_id):
 
 
 # ── Owner Hourly Promo Notifier ────────────────────────────────────────────────
-_PROMO_INTERVAL_SECONDS = 3600  # 1 hour
+_PROMO_INTERVAL_SECONDS = 7 * 24 * 3600  # هفته‌ای یک‌بار
 
 _PROMO_TEXT = (
-    "دیگه وقتشه رباتت رو به Seamless Premium ارتقا بدی 🚀\n"
-    "ربات با کلی امکانات\n"
-    "برای اطلاعات بیشتر و خرید اشتراک به @Emad_Habibnia پیام بدهید"
+    "🚀 Seamless | VPN Sales System\n"
+    "\n"
+    "🌐 seamless.nyxon.tech\n"
+    "\n"
+    "🤖 Demo: @Seamless_ROBOT\n"
+    "🛒 Buy: @license_Seamless_BOT\n"
+    "💬 Support: @Seamless_Sup\n"
+    "chanel : @SeamlessHub\n"
+    "\n"
+    "⚡️ اخبار، آموزش‌ها و آپدیت‌های Seamless\n"
+    "💚 Build. Sell. Grow."
 )
 
 
 def _owner_promo_loop():
-    """Background thread: send the promo message to all owners every hour."""
+    """Background thread: send the promo message to all owners once a week."""
     # On startup, wait a short random jitter (0 s) before first check so the bot
     # has time to connect. The DB-backed timestamp prevents flood on restart.
     while True:
@@ -571,7 +579,7 @@ def _owner_promo_loop():
         except Exception as exc:
             logger.warning("owner_promo_loop error: %s", exc)
 
-        time.sleep(60)  # check every minute; actual send happens only once per hour
+        time.sleep(60)  # check every minute; actual send happens only once a week
 
 
 def start_owner_promo_loop():
