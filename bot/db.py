@@ -291,6 +291,32 @@ def init_db():
             "ALTER TABLE packages ADD COLUMN position INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE config_types ADD COLUMN description TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE panel_packages ADD COLUMN inbound_id INTEGER NOT NULL DEFAULT 1",
+            # v3: پنل 3x-ui نسل ۳ — آدرس کامل و توکن API به‌جای لاگین با رمز
+            "ALTER TABLE panels ADD COLUMN scheme TEXT NOT NULL DEFAULT 'https'",
+            "ALTER TABLE panels ADD COLUMN base_path TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE panels ADD COLUMN api_token TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE panels ADD COLUMN verify_tls INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE panels ADD COLUMN last_error TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE panels ADD COLUMN last_sync_at TEXT NOT NULL DEFAULT ''",
+            # v3: یک پکیج می‌تواند روی چند اینباند بنشیند (کلاینت در نسل ۳ مستقل است)
+            "ALTER TABLE panel_packages ADD COLUMN inbound_ids TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE panel_packages ADD COLUMN price INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE panel_packages ADD COLUMN type_id INTEGER",
+            "ALTER TABLE panel_packages ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE panel_packages ADD COLUMN limit_ip INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE panel_packages ADD COLUMN position INTEGER NOT NULL DEFAULT 0",
+            # کش اینباندهای هر پنل، پر می‌شود با دکمهٔ «همگام‌سازی»
+            ("CREATE TABLE IF NOT EXISTS panel_inbounds ("
+             " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+             " panel_id INTEGER NOT NULL,"
+             " inbound_id INTEGER NOT NULL,"
+             " remark TEXT NOT NULL DEFAULT '',"
+             " protocol TEXT NOT NULL DEFAULT '',"
+             " port INTEGER NOT NULL DEFAULT 0,"
+             " enable INTEGER NOT NULL DEFAULT 1,"
+             " synced_at TEXT NOT NULL,"
+             " UNIQUE(panel_id, inbound_id),"
+             " FOREIGN KEY(panel_id) REFERENCES panels(id) ON DELETE CASCADE)"),
             "ALTER TABLE config_types ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
             "CREATE TABLE IF NOT EXISTS pinned_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created_at TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS pinned_message_sends (id INTEGER PRIMARY KEY AUTOINCREMENT, pin_id INTEGER NOT NULL, user_id INTEGER NOT NULL, message_id INTEGER NOT NULL)",
@@ -1057,19 +1083,67 @@ def get_panel(panel_id):
         ).fetchone()
 
 
-def add_panel(name, ip, port, patch, username, password):
+def add_panel(name, ip, port, patch="", username="", password="",
+              scheme="https", base_path="", api_token="", verify_tls=0):
+    """پنل جدید. مسیر توصیه‌شده توکن API است؛ username/password فقط برای
+    پنل‌هایی که هنوز توکن ندارند نگه داشته شده."""
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO panels(name,ip,port,patch,username,password,is_active,created_at)"
-            " VALUES(?,?,?,?,?,?,1,?)",
-            (name.strip(), ip.strip(), int(port), patch.strip(),
-             username.strip(), password, now_str())
+            "INSERT INTO panels(name,ip,port,patch,username,password,is_active,created_at,"
+            " scheme,base_path,api_token,verify_tls)"
+            " VALUES(?,?,?,?,?,?,1,?,?,?,?,?)",
+            (name.strip(), ip.strip(), int(port), (patch or "").strip(),
+             (username or "").strip(), password or "", now_str(),
+             scheme, (base_path or "").strip(), (api_token or "").strip(), int(verify_tls))
         )
         return conn.execute("SELECT last_insert_rowid() AS x").fetchone()["x"]
 
 
+# ── کش اینباندهای پنل ─────────────────────────────────────────────────────────
+def save_panel_inbounds(panel_id, inbounds):
+    """
+    نتیجهٔ «همگام‌سازی» را می‌نویسد.
+
+    اینباندی که دیگر روی پنل نیست حذف می‌شود تا ادمین پکیجی روی چیزی که
+    وجود ندارد نسازد؛ ولی پکیج‌هایی که قبلاً به آن اشاره داده‌اند دست‌نخورده
+    می‌مانند و موقع فروش خطای روشن می‌دهند — بی‌صدا به اینباند دیگری
+    منتقلشان کردن، بدترین کار ممکن است.
+    """
+    seen = [int(i["id"]) for i in inbounds if i.get("id") is not None]
+    with get_conn() as conn:
+        for ib in inbounds:
+            if ib.get("id") is None:
+                continue
+            conn.execute(
+                "INSERT INTO panel_inbounds(panel_id,inbound_id,remark,protocol,port,enable,synced_at)"
+                " VALUES(?,?,?,?,?,?,?)"
+                " ON CONFLICT(panel_id,inbound_id) DO UPDATE SET"
+                " remark=excluded.remark, protocol=excluded.protocol, port=excluded.port,"
+                " enable=excluded.enable, synced_at=excluded.synced_at",
+                (panel_id, int(ib["id"]), ib.get("remark", ""), ib.get("protocol", ""),
+                 int(ib.get("port") or 0), 1 if ib.get("enable", True) else 0, now_str())
+            )
+        if seen:
+            marks = ",".join("?" * len(seen))
+            conn.execute(
+                f"DELETE FROM panel_inbounds WHERE panel_id=? AND inbound_id NOT IN ({marks})",
+                [panel_id] + seen)
+        else:
+            conn.execute("DELETE FROM panel_inbounds WHERE panel_id=?", (panel_id,))
+    return len(seen)
+
+
+def get_panel_inbounds(panel_id):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM panel_inbounds WHERE panel_id=? ORDER BY inbound_id ASC",
+            (panel_id,)
+        ).fetchall()
+
+
 def update_panel_field(panel_id, field, value):
-    allowed = {"name", "ip", "port", "patch", "username", "password", "is_active"}
+    allowed = {"name", "ip", "port", "patch", "username", "password", "is_active",
+               "scheme", "base_path", "api_token", "verify_tls", "last_error", "last_sync_at"}
     if field not in allowed:
         return
     with get_conn() as conn:
@@ -1093,6 +1167,56 @@ def get_panel_package(pp_id):
         return conn.execute(
             "SELECT * FROM panel_packages WHERE id=?", (pp_id,)
         ).fetchone()
+
+
+def get_panel_package_inbound_ids(pp_row):
+    """اینباندهای یک پکیج. ستون تازهٔ inbound_ids ارجح است؛ اگر خالی بود به
+    ستون تکیِ نسل قبل برمی‌گردیم تا پکیج‌های قدیمی از کار نیفتند."""
+    try:
+        raw = pp_row["inbound_ids"]
+    except (IndexError, KeyError):
+        raw = ""
+    if raw:
+        try:
+            ids = [int(x) for x in json.loads(raw)]
+            if ids:
+                return ids
+        except Exception:
+            pass
+    try:
+        single = int(pp_row["inbound_id"] or 0)
+    except (IndexError, KeyError, TypeError, ValueError):
+        single = 0
+    return [single] if single else []
+
+
+def set_panel_package_inbounds(pp_id, inbound_ids):
+    ids = sorted({int(i) for i in inbound_ids})
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE panel_packages SET inbound_ids=?, inbound_id=? WHERE id=?",
+            (json.dumps(ids), ids[0] if ids else 0, pp_id))
+
+
+def update_panel_package_field(pp_id, field, value):
+    allowed = {"name", "volume_gb", "duration_days", "price", "type_id",
+               "is_active", "limit_ip", "position"}
+    if field not in allowed:
+        return
+    with get_conn() as conn:
+        conn.execute(f"UPDATE panel_packages SET {field}=? WHERE id=?", (value, pp_id))
+
+
+def get_active_panel_packages_for_type(type_id):
+    """پکیج‌های پنلیِ فعالِ یک دسته‌بندی — همان‌جایی که پکیج‌های انباری هم می‌آیند."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT pp.*, p.name AS panel_name FROM panel_packages pp"
+            " JOIN panels p ON p.id=pp.panel_id"
+            " WHERE pp.type_id=? AND pp.is_active=1 AND p.is_active=1"
+            " ORDER BY pp.position ASC, pp.id ASC",
+            (type_id,)
+        ).fetchall()
 
 
 def add_panel_package(panel_id, name, volume_gb, duration_days, inbound_id=1):
