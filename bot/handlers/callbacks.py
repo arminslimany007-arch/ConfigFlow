@@ -341,6 +341,25 @@ def _swapwallet_error_inline(call, err_msg):
             pass
 
 
+def _assign_or_release(cfg_id, uid, package_id, amount, method):
+    """کانفیگِ رزروشده را به کاربر تخصیص می‌دهد و purchase_id برمی‌گرداند.
+
+    اگر تخصیص شکست بخورد — مثلاً همان کانفیگ در همین لحظه به کس دیگری رسیده
+    باشد — رزرو آزاد می‌شود تا از موجودی بیرون نماند، و None برمی‌گردد تا
+    صدازننده سفارش را به صف ادمین بفرستد. بدون این آزادسازی، کانفیگ با
+    reserved_payment_id پر و sold_to خالی می‌ماند: نه فروختنی، نه دیدنی.
+    """
+    try:
+        return assign_config_to_user(cfg_id, uid, package_id, amount, method, is_test=0)
+    except Exception as e:
+        print("ASSIGN_CONFIG_FAILED:", method, cfg_id, e)
+        try:
+            release_reserved_config(cfg_id)
+        except Exception:
+            pass
+        return None
+
+
 # ── TetraPay auto-verify thread ───────────────────────────────────────────────
 def _tetrapay_auto_verify(payment_id, authority, uid, chat_id, message_id, kind,
                           package_id=None):
@@ -356,9 +375,12 @@ def _tetrapay_auto_verify(payment_id, authority, uid, chat_id, message_id, kind,
             continue
         # Payment confirmed — process it
         try:
+            # قفل اتمی برای هر نوع پرداخت، نه فقط شارژ کیف پول: دکمهٔ «بررسی پرداخت»
+            # و همین ترد می‌توانند هم‌زمان برسند و ترد زیر قفلِ per-user نیست. اگر هر
+            # دو رد شوند، هر دو یک کانفیگ رزرو می‌کنند و یکی برای همیشه قفل می‌ماند.
+            if not complete_payment(payment_id):
+                return
             if kind == "wallet_charge":
-                if not complete_payment(payment_id):  # atomic: only one thread wins
-                    return
                 update_balance(uid, payment["amount"])
                 state_clear(uid)
                 try:
@@ -373,12 +395,11 @@ def _tetrapay_auto_verify(payment_id, authority, uid, chat_id, message_id, kind,
 
             elif kind == "config_purchase":
                 pkg_row = get_package(package_id)
-                cfg_id = payment["config_id"]
-                if not cfg_id:
-                    cfg_id = reserve_first_config(package_id, payment_id)
-                if not cfg_id:
+                cfg_id = payment["config_id"] or reserve_first_config(package_id, payment_id)
+                purchase_id_new = _assign_or_release(
+                    cfg_id, uid, package_id, payment["amount"], "tetrapay") if cfg_id else None
+                if not purchase_id_new:
                     pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "tetrapay")
-                    complete_payment(payment_id)
                     state_clear(uid)
                     msg_text = (
                         "✅ پرداخت شما تأیید شد.\n\n"
@@ -393,8 +414,6 @@ def _tetrapay_auto_verify(payment_id, authority, uid, chat_id, message_id, kind,
                         bot.send_message(uid, msg_text, parse_mode="HTML", reply_markup=back_button("main"))
                     notify_pending_order_to_admins(pending_id, uid, pkg_row, payment["amount"], "tetrapay")
                     return
-                purchase_id_new = assign_config_to_user(cfg_id, uid, package_id, payment["amount"], "tetrapay", is_test=0)
-                complete_payment(payment_id)
                 state_clear(uid)
                 try:
                     bot.edit_message_text("✅ پرداخت شما تأیید شد و سرویس آماده است.",
@@ -413,7 +432,6 @@ def _tetrapay_auto_verify(payment_id, authority, uid, chat_id, message_id, kind,
                     row = conn.execute("SELECT purchase_id FROM configs WHERE id=?", (cfg_id,)).fetchone()
                 pid = row["purchase_id"] if row else 0
                 item = get_purchase(pid) if pid else None
-                complete_payment(payment_id)
                 state_clear(uid)
                 msg_text = (
                     "✅ <b>درخواست تمدید ارسال شد</b>\n\n"
@@ -481,9 +499,10 @@ def _tronpays_rial_auto_verify(payment_id, invoice_id, uid, chat_id, message_id,
         if not ok or not is_tronpays_paid(status):
             continue
         try:
+            # همان دلیل ترد تتراپی: قفل اتمی باید پیش از هر تحویلی گرفته شود.
+            if not complete_payment(payment_id):
+                return
             if kind == "wallet_charge":
-                if not complete_payment(payment_id):  # atomic: only one thread wins
-                    return
                 update_balance(uid, payment["amount"])
                 state_clear(uid)
                 try:
@@ -498,12 +517,11 @@ def _tronpays_rial_auto_verify(payment_id, invoice_id, uid, chat_id, message_id,
 
             elif kind == "config_purchase":
                 pkg_row = get_package(package_id)
-                cfg_id = payment["config_id"]
-                if not cfg_id:
-                    cfg_id = reserve_first_config(package_id, payment_id)
-                if not cfg_id:
+                cfg_id = payment["config_id"] or reserve_first_config(package_id, payment_id)
+                purchase_id_new = _assign_or_release(
+                    cfg_id, uid, package_id, payment["amount"], "tronpays_rial") if cfg_id else None
+                if not purchase_id_new:
                     pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "tronpays_rial")
-                    complete_payment(payment_id)
                     state_clear(uid)
                     msg_text = (
                         "✅ پرداخت شما تأیید شد.\n\n"
@@ -518,8 +536,6 @@ def _tronpays_rial_auto_verify(payment_id, invoice_id, uid, chat_id, message_id,
                         bot.send_message(uid, msg_text, parse_mode="HTML", reply_markup=back_button("main"))
                     notify_pending_order_to_admins(pending_id, uid, pkg_row, payment["amount"], "tronpays_rial")
                     return
-                purchase_id_new = assign_config_to_user(cfg_id, uid, package_id, payment["amount"], "tronpays_rial", is_test=0)
-                complete_payment(payment_id)
                 state_clear(uid)
                 try:
                     bot.edit_message_text("✅ پرداخت شما تأیید شد و سرویس آماده است.",
@@ -538,7 +554,6 @@ def _tronpays_rial_auto_verify(payment_id, invoice_id, uid, chat_id, message_id,
                     row = conn.execute("SELECT purchase_id FROM configs WHERE id=?", (cfg_id,)).fetchone()
                 pid = row["purchase_id"] if row else 0
                 item = get_purchase(pid) if pid else None
-                complete_payment(payment_id)
                 state_clear(uid)
                 msg_text = (
                     "✅ <b>درخواست تمدید ارسال شد</b>\n\n"
@@ -1015,7 +1030,9 @@ def _dispatch_callback(call, uid, data):
         authority = payment["receipt_text"]
         success, result = verify_tetrapay_order(authority)
         if success:
-            complete_payment(payment_id)
+            if not complete_payment(payment_id):
+                bot.answer_callback_query(call.id, "این پرداخت قبلاً پردازش شده.", show_alert=True)
+                return
             package_row = get_package(payment["package_id"])
             config_id = payment["config_id"]
             with get_conn() as conn:
@@ -1113,7 +1130,9 @@ def _dispatch_callback(call, uid, data):
             bot.answer_callback_query(call.id, "خطا در بررسی وضعیت فاکتور.", show_alert=True)
             return
         if is_tronpays_paid(status):
-            complete_payment(payment_id)
+            if not complete_payment(payment_id):
+                bot.answer_callback_query(call.id, "این پرداخت قبلاً پردازش شده.", show_alert=True)
+                return
             package_row = get_package(payment["package_id"])
             config_id   = payment["config_id"]
             with get_conn() as conn:
@@ -1554,10 +1573,12 @@ def _dispatch_callback(call, uid, data):
         authority = payment["receipt_text"]
         success, result = verify_tetrapay_order(authority)
         if success:
+            # قفل اتمی پیش از هر تحویلی، برای هر نوع پرداخت: ترد بررسی خودکار هم
+            # می‌تواند هم‌زمان همین پرداخت را ببیند و ترد زیر قفلِ per-user نیست.
+            if not complete_payment(payment_id):
+                bot.answer_callback_query(call.id, "این پرداخت قبلاً پردازش شده.", show_alert=True)
+                return
             if payment["kind"] == "wallet_charge":
-                if not complete_payment(payment_id):  # atomic: only one path wins
-                    bot.answer_callback_query(call.id, "این پرداخت قبلاً پردازش شده.", show_alert=True)
-                    return
                 update_balance(uid, payment["amount"])
                 bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                 send_or_edit(call, f"✅ پرداخت شما تأیید و کیف پول شارژ شد.\n\n💰 مبلغ: {fmt_price(payment['amount'])} تومان", back_button("main"))
@@ -1568,9 +1589,10 @@ def _dispatch_callback(call, uid, data):
                 package_row = get_package(package_id)
                 if not config_id:
                     config_id = reserve_first_config(package_id, payment_id)
-                if not config_id:
+                purchase_id = _assign_or_release(
+                    config_id, uid, package_id, payment["amount"], "tetrapay") if config_id else None
+                if not purchase_id:
                     pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "tetrapay")
-                    complete_payment(payment_id)
                     bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                     send_or_edit(call,
                         "✅ پرداخت شما تأیید شد.\n\n"
@@ -1580,8 +1602,6 @@ def _dispatch_callback(call, uid, data):
                     notify_pending_order_to_admins(pending_id, uid, package_row, payment["amount"], "tetrapay")
                     state_clear(uid)
                     return
-                purchase_id = assign_config_to_user(config_id, uid, package_id, payment["amount"], "tetrapay", is_test=0)
-                complete_payment(payment_id)
                 bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                 send_or_edit(call, "✅ پرداخت شما تأیید شد و سرویس آماده است.", back_button("main"))
                 deliver_purchase_message(call.message.chat.id, purchase_id)
@@ -1655,10 +1675,11 @@ def _dispatch_callback(call, uid, data):
             bot.answer_callback_query(call.id, "خطا در بررسی وضعیت فاکتور.", show_alert=True)
             return
         if is_tronpays_paid(status):
+            # همان دلیل تتراپی: قفل اتمی پیش از تحویل، برای هر نوع پرداخت.
+            if not complete_payment(payment_id):
+                bot.answer_callback_query(call.id, "این پرداخت قبلاً پردازش شده.", show_alert=True)
+                return
             if payment["kind"] == "wallet_charge":
-                if not complete_payment(payment_id):  # atomic: only one path wins
-                    bot.answer_callback_query(call.id, "این پرداخت قبلاً پردازش شده.", show_alert=True)
-                    return
                 update_balance(uid, payment["amount"])
                 bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                 send_or_edit(call, f"✅ پرداخت شما تأیید و کیف پول شارژ شد.\n\n💰 مبلغ: {fmt_price(payment['amount'])} تومان",
@@ -1670,9 +1691,10 @@ def _dispatch_callback(call, uid, data):
                 package_row = get_package(package_id)
                 if not config_id:
                     config_id = reserve_first_config(package_id, payment_id)
-                if not config_id:
+                purchase_id = _assign_or_release(
+                    config_id, uid, package_id, payment["amount"], "tronpays_rial") if config_id else None
+                if not purchase_id:
                     pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "tronpays_rial")
-                    complete_payment(payment_id)
                     bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                     send_or_edit(call,
                         "✅ پرداخت شما تأیید شد.\n\n"
@@ -1682,8 +1704,6 @@ def _dispatch_callback(call, uid, data):
                     notify_pending_order_to_admins(pending_id, uid, package_row, payment["amount"], "tronpays_rial")
                     state_clear(uid)
                     return
-                purchase_id = assign_config_to_user(config_id, uid, package_id, payment["amount"], "tronpays_rial", is_test=0)
-                complete_payment(payment_id)
                 bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                 send_or_edit(call, "✅ پرداخت شما تأیید شد و سرویس آماده است.", back_button("main"))
                 deliver_purchase_message(call.message.chat.id, purchase_id)
@@ -2028,10 +2048,11 @@ def _dispatch_callback(call, uid, data):
             return
         inv_status = inv.get("status", "")
         if inv_status in ("PAID", "COMPLETED") or inv.get("paidAt"):
+            # همان دلیل تتراپی: قفل اتمی پیش از تحویل، برای هر نوع پرداخت.
+            if not complete_payment(payment_id):
+                bot.answer_callback_query(call.id, "این پرداخت قبلاً پردازش شده.", show_alert=True)
+                return
             if payment["kind"] == "wallet_charge":
-                if not complete_payment(payment_id):  # atomic: only one path wins
-                    bot.answer_callback_query(call.id, "این پرداخت قبلاً پردازش شده.", show_alert=True)
-                    return
                 update_balance(uid, payment["amount"])
                 bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                 send_or_edit(call, f"✅ پرداخت شما تأیید و کیف پول شارژ شد.\n\n💰 مبلغ: {fmt_price(payment['amount'])} تومان",
@@ -2043,9 +2064,10 @@ def _dispatch_callback(call, uid, data):
                 package_row = get_package(package_id)
                 if not config_id:
                     config_id = reserve_first_config(package_id, payment_id)
-                if not config_id:
+                purchase_id = _assign_or_release(
+                    config_id, uid, package_id, payment["amount"], "swapwallet_crypto") if config_id else None
+                if not purchase_id:
                     pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "swapwallet_crypto")
-                    complete_payment(payment_id)
                     bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                     send_or_edit(call,
                         "✅ پرداخت شما تأیید شد.\n\n"
@@ -2055,8 +2077,6 @@ def _dispatch_callback(call, uid, data):
                     notify_pending_order_to_admins(pending_id, uid, package_row, payment["amount"], "swapwallet_crypto")
                     state_clear(uid)
                     return
-                purchase_id = assign_config_to_user(config_id, uid, package_id, payment["amount"], "swapwallet_crypto", is_test=0)
-                complete_payment(payment_id)
                 bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                 send_or_edit(call, "✅ پرداخت شما تأیید شد و سرویس آماده است.", back_button("main"))
                 deliver_purchase_message(call.message.chat.id, purchase_id)
@@ -2106,7 +2126,9 @@ def _dispatch_callback(call, uid, data):
             bot.answer_callback_query(call.id, "خطا در بررسی وضعیت فاکتور.", show_alert=True)
             return
         if inv.get("status") in ("PAID", "COMPLETED") or inv.get("paidAt"):
-            complete_payment(payment_id)
+            if not complete_payment(payment_id):
+                bot.answer_callback_query(call.id, "این پرداخت قبلاً پردازش شده.", show_alert=True)
+                return
             package_row = get_package(payment["package_id"])
             config_id   = payment["config_id"]
             with get_conn() as conn:
@@ -3143,6 +3165,9 @@ def _dispatch_callback(call, uid, data):
 
     # ── Admin: Bulk select — Execute delete ───────────────────────────────────
     if data == "adm:stk:bdel":
+        if not (admin_has_perm(uid, "manage_configs") or uid in ADMIN_IDS):
+            bot.answer_callback_query(call.id, "دسترسی مجاز نیست.", show_alert=True)
+            return
         sd      = state_data(uid)
         sel_raw = sd.get("selected", "")
         ids     = [int(x) for x in sel_raw.split(",") if x.strip().lstrip("-").isdigit()]
@@ -3159,6 +3184,9 @@ def _dispatch_callback(call, uid, data):
 
     # ── Admin: Bulk select — Execute expire ───────────────────────────────────
     if data == "adm:stk:bexp":
+        if not (admin_has_perm(uid, "manage_configs") or uid in ADMIN_IDS):
+            bot.answer_callback_query(call.id, "دسترسی مجاز نیست.", show_alert=True)
+            return
         sd      = state_data(uid)
         sel_raw = sd.get("selected", "")
         ids     = [int(x) for x in sel_raw.split(",") if x.strip().lstrip("-").isdigit()]

@@ -305,6 +305,22 @@ def init_db():
             except Exception:
                 pass
 
+        # ── آزادسازی رزروهای یتیم ────────────────────────────────────────────
+        # کانفیگی که reserved_payment_id دارد ولی فروخته نشده، فقط تا وقتی معتبر
+        # است که پرداختش هنوز pending باشد. اگر ربات بین رزرو و تخصیص کشته شود،
+        # آن کانفیگ برای همیشه قفل می‌ماند: نه در موجودی دیده می‌شود نه فروش
+        # می‌رود. اینجا — که هیچ خریدی در جریان نیست — آزادش می‌کنیم.
+        # کلیدهای موقتِ tmp_* هم چون به هیچ پرداختی وصل نیستند آزاد می‌شوند.
+        try:
+            conn.execute(
+                "UPDATE configs SET reserved_payment_id=NULL "
+                "WHERE sold_to IS NULL AND reserved_payment_id IS NOT NULL "
+                "AND reserved_payment_id NOT IN "
+                "(SELECT id FROM payments WHERE status='pending')"
+            )
+        except Exception:
+            pass
+
 
 # ── Settings ───────────────────────────────────────────────────────────────────
 def setting_get(key, default=""):

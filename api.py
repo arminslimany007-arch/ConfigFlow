@@ -9,6 +9,7 @@ Or started automatically by bot.py when worker_api_enabled=1.
 """
 
 import os
+import hmac
 import json
 import sqlite3
 import functools
@@ -63,7 +64,8 @@ def require_api_key(f):
         if not expected:
             return jsonify({"error": "API key not configured on server"}), 503
         provided = request.headers.get("X-API-Key", "")
-        if provided != expected:
+        # مقایسهٔ ثابت‌زمان: با != طول تطابق از روی زمان پاسخ قابل حدس است
+        if not hmac.compare_digest(provided, expected):
             return jsonify({"error": "Unauthorized"}), 401
         return f(*args, **kwargs)
     return wrapper

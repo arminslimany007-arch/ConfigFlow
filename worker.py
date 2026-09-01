@@ -74,6 +74,13 @@ def _validate_config():
     errors = []
     if not BOT_API_URL:
         errors.append("BOT_API_URL not set")
+    elif BOT_API_URL.startswith("http://"):
+        # کلید مشترک و لینک کانفیگ هر مشتری در همین درخواست‌ها رد و بدل می‌شوند؛
+        # روی http هر دو بدون رمز از مرز عبور می‌کنند. جلوی اجرا را نمی‌گیریم تا
+        # نصب‌های موجود نخوابند، ولی اپراتور باید بداند.
+        log.warning("BOT_API_URL is plain http:// — the API key and every "
+                    "delivered config link travel unencrypted. Use https:// "
+                    "(or an SSH tunnel / WireGuard link) if you can.")
     if not WORKER_API_KEY:
         errors.append("WORKER_API_KEY not set")
     if not PANEL_USERNAME:
