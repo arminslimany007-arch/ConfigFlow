@@ -503,11 +503,6 @@ def update_balance(user_id, delta):
         )
 
 
-def set_balance(user_id, amount):
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET balance=? WHERE user_id=?", (amount, user_id))
-
-
 def set_user_status(user_id, status):
     with get_conn() as conn:
         conn.execute("UPDATE users SET status=? WHERE user_id=?", (status, user_id))
@@ -854,17 +849,6 @@ def get_user_purchases(user_id):
             """,
             (user_id,)
         ).fetchall()
-
-
-def user_has_test_for_type(user_id, type_id):
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM purchases pr "
-            "JOIN packages p ON p.id=pr.package_id "
-            "WHERE pr.user_id=? AND p.type_id=? AND pr.is_test=1",
-            (user_id, type_id)
-        ).fetchone()
-    return row["n"] > 0
 
 
 def user_has_any_test(user_id):
@@ -1374,18 +1358,6 @@ def delete_payment_admin_messages(payment_id):
         )
 
 
-def count_referee_first_purchases(referrer_id):
-    """Count how many of referrer's referees have made at least one non-test purchase."""
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT COUNT(DISTINCT r.referee_id) AS n "
-            "FROM referrals r "
-            "JOIN purchases p ON p.user_id = r.referee_id AND p.is_test = 0 "
-            "WHERE r.referrer_id=? AND r.purchase_reward_given = 0",
-            (referrer_id,)
-        ).fetchone()["n"]
-
-
 def set_referral_channel_joined(referee_id: int) -> bool:
     """
     Atomically mark that a referee has joined the channel (0 → 1 transition).
@@ -1423,15 +1395,6 @@ def try_claim_start_reward_batch(referrer_id: int, required_count: int,
         return cur.rowcount >= required_count
 
 
-def mark_start_reward_given(referrer_id, referee_ids):
-    with get_conn() as conn:
-        for rid in referee_ids:
-            conn.execute(
-                "UPDATE referrals SET start_reward_given=1 WHERE referrer_id=? AND referee_id=?",
-                (referrer_id, rid)
-            )
-
-
 def mark_purchase_reward_given(referrer_id, referee_ids):
     with get_conn() as conn:
         for rid in referee_ids:
@@ -1439,33 +1402,6 @@ def mark_purchase_reward_given(referrer_id, referee_ids):
                 "UPDATE referrals SET purchase_reward_given=1 WHERE referrer_id=? AND referee_id=?",
                 (referrer_id, rid)
             )
-
-
-def mark_referee_channel_joined(referee_id):
-    """Mark that the invited user (referee) has joined the required channel."""
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE referrals SET channel_joined=1 WHERE referee_id=?",
-            (referee_id,)
-        )
-
-
-def get_unrewarded_start_referrals(referrer_id):
-    """Get referees who haven't been rewarded for starting yet (invite_only mode)."""
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM referrals WHERE referrer_id=? AND start_reward_given=0",
-            (referrer_id,)
-        ).fetchall()
-
-
-def get_unrewarded_start_referrals_channel(referrer_id):
-    """Get referees who joined channel but start reward not given yet (channel_join mode)."""
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM referrals WHERE referrer_id=? AND start_reward_given=0 AND channel_joined=1",
-            (referrer_id,)
-        ).fetchall()
 
 
 def get_unrewarded_purchase_referees(referrer_id):

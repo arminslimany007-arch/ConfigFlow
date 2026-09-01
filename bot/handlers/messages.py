@@ -48,7 +48,7 @@ from ..ui.notifications import (
     notify_pending_order_to_admins, _complete_pending_order, auto_fulfill_pending_orders,
 )
 from ..payments import (
-    get_effective_price, show_payment_method_selection,
+    get_effective_price,
     show_crypto_selection, show_crypto_payment_info,
     send_payment_to_admins, finish_card_payment_approval,
 )

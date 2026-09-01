@@ -65,7 +65,7 @@ from ..group_manager import (
     _count_active_topics, TOPICS, send_to_topic, log_admin_action,
 )
 from ..payments import (
-    get_effective_price, show_payment_method_selection,
+    get_effective_price,
     show_crypto_selection, show_crypto_payment_info,
     send_payment_to_admins, finish_card_payment_approval,
 )
@@ -4532,7 +4532,10 @@ def _dispatch_callback(call, uid, data):
             types.InlineKeyboardButton(sr_label, callback_data="adm:ref:sr:toggle"),
             types.InlineKeyboardButton("وضعیت هدیه استارت", callback_data="adm:ops:noop"),
         )
-        kb.add(types.InlineKeyboardButton("🔑 شرط: استارت ربات + عضویت کانال", callback_data="adm:ops:noop"))
+        sr_mode = setting_get("referral_start_reward_mode", "invite_only")
+        sr_mode_label = ("🔑 شرط: استارت + عضویت کانال" if sr_mode == "channel_join"
+                         else "🔑 شرط: فقط استارت ربات")
+        kb.add(types.InlineKeyboardButton(sr_mode_label, callback_data="adm:ref:sr:mode"))
         kb.add(types.InlineKeyboardButton(f"📊 تعداد: {sr_count} زیرمجموعه", callback_data="adm:ref:sr:count"))
         kb.add(types.InlineKeyboardButton(f"🎯 نوع هدیه: {sr_type_label}", callback_data="adm:ref:sr:type"))
         if sr_type == "wallet":
@@ -4626,6 +4629,19 @@ def _dispatch_callback(call, uid, data):
         return
 
     # Start reward toggles
+    if data == "adm:ref:sr:mode":
+        if not admin_has_perm(uid, "settings"):
+            bot.answer_callback_query(call.id, "دسترسی مجاز نیست.", show_alert=True)
+            return
+        cur = setting_get("referral_start_reward_mode", "invite_only")
+        new_mode = "invite_only" if cur == "channel_join" else "channel_join"
+        setting_set("referral_start_reward_mode", new_mode)
+        log_admin_action(uid, "شرط هدیه استارت: " + (
+            "استارت + عضویت کانال" if new_mode == "channel_join" else "فقط استارت ربات"))
+        bot.answer_callback_query(call.id)
+        send_or_edit(call, _ref_settings_text(), _ref_settings_kb())
+        return
+
     if data == "adm:ref:sr:toggle":
         if not admin_has_perm(uid, "settings"):
             bot.answer_callback_query(call.id, "دسترسی مجاز نیست.", show_alert=True)
